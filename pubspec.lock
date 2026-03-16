@@ -520,14 +520,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.2"
+  jni:
+    dependency: "direct main"
+    description:
+      name: jni
+      sha256: d2c361082d554d4593c3012e26f6b188f902acd291330f13d6427641a92b3da1
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.14.2"
   jnigen:
     dependency: "direct dev"
     description:
       name: jnigen
-      sha256: dcb5927c2b15ddd3bfcd1b13a13c063828ac4e495f9f87dd11e7968f68114ac7
+      sha256: "719fc385d913b19d28b1517c26043b32bc569cb4db4b3c663909ec3c76b35c32"
       url: "https://pub.dev"
     source: hosted
-    version: "0.15.0"
+    version: "0.14.2"
   js:
     dependency: transitive
     description:

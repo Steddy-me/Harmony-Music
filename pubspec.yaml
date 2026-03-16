@@ -51,7 +51,7 @@ dependencies:
   hive_flutter: ^1.1.0
   html: ^0.15.6
   ionicons: ^0.2.2
-  #jni: ^0.15.2
+  jni: ^0.14.2
   just_audio: ^0.10.5
   just_audio_media_kit:
     git:
@@ -96,7 +96,7 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter
-  jnigen: ^0.15.0
+  jnigen: ^0.14.2
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

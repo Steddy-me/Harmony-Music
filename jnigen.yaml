@@ -3,11 +3,15 @@ android_sdk_config:
 
 output:
   dart:
-    path: lib/native_bindings/andrid_utils.dart
+    path: lib/native_bindings/android_utils.dart
     structure: single_file
 
 source_path:
   - 'android/app/src/main/kotlin'
+
+class_path:
+  - android/app/build/intermediates/javac/debug/classes
+
 classes:
   - 'com.anandnet.harmonymusic.Equalizer'
   - 'com.anandnet.harmonymusic.SDKInt'
