@@ -72,13 +72,15 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
     }
     _mediaLibrary = MediaLibrary();
     _player = AudioPlayer(
-        audioLoadConfiguration: const AudioLoadConfiguration(
-            androidLoadControl: AndroidLoadControl(
-      minBufferDuration: Duration(seconds: 50),
-      maxBufferDuration: Duration(seconds: 120),
-      bufferForPlaybackDuration: Duration(milliseconds: 50),
-      bufferForPlaybackAfterRebufferDuration: Duration(seconds: 2),
-    )));
+      audioLoadConfiguration: const AudioLoadConfiguration(
+        androidLoadControl: AndroidLoadControl(
+          minBufferDuration: Duration(seconds: 50),
+          maxBufferDuration: Duration(seconds: 120),
+          bufferForPlaybackDuration: Duration(milliseconds: 50),
+          bufferForPlaybackAfterRebufferDuration: Duration(seconds: 2),
+        ),
+      ),
+    );
     _createCacheDir();
     _addEmptyList();
     _notifyAudioHandlerAboutPlaybackEvents();
@@ -174,7 +176,7 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
           LoopMode.one: AudioServiceRepeatMode.one,
           LoopMode.all: AudioServiceRepeatMode.all,
         }[_player.loopMode]!,
-        shuffleMode: (shuffleModeEnabled)
+        shuffleMode: shuffleModeEnabled
             ? AudioServiceShuffleMode.all
             : AudioServiceShuffleMode.none,
         playing: playing,
@@ -314,10 +316,17 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
       final sharedLibrary = Get.find<SharedLibraryService>();
       final fullPath = '${sharedLibrary.sharedDir.path}/$relativePath';
       final file = File(fullPath);
+
+      printINFO('RELATIVE PATH CHECK => $relativePath');
+      printINFO('RELATIVE FULL PATH => $fullPath');
+      printINFO('RELATIVE FILE EXISTS => ${file.existsSync()}');
+
       if (file.existsSync()) {
         return _normalizeFileUri(fullPath);
       }
-    } catch (_) {}
+    } catch (e) {
+      printERROR('RELATIVE PATH RESOLVE ERROR => $e');
+    }
 
     return null;
   }
@@ -558,46 +567,74 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
         endOfQueueReached = false;
         final isNewUrlReq = extras['newUrl'] ?? false;
         final currentSong = queue.value[currentIndex];
-        final futureStreamInfo =
-            checkNGetUrl(currentSong.id, generateNewUrl: isNewUrlReq);
         final bool restoreSession = extras['restoreSession'] ?? false;
+
         isSongLoading = true;
-        playbackState.add(playbackState.value
-            .copyWith(processingState: AudioProcessingState.loading));
+        playbackState.add(
+          playbackState.value.copyWith(
+            processingState: AudioProcessingState.loading,
+          ),
+        );
+
         if (_playList.children.isNotEmpty) {
           await _playList.clear();
         }
 
         mediaItem.add(currentSong);
-        final streamInfo = await futureStreamInfo;
-        if (songIndex != currentIndex) {
-          return;
-        } else if (!streamInfo.playable) {
-          currentSongUrl = null;
-          isSongLoading = false;
-          Get.find<PlayerController>().notifyPlayError(streamInfo.statusMSG);
-          playbackState.add(playbackState.value.copyWith(
-              processingState: AudioProcessingState.error,
-              errorCode: 404,
-              errorMessage: streamInfo.statusMSG));
-          return;
+
+        final localSource = _getPlayableSource(currentSong);
+        final hasLocalFile =
+            localSource != null && localSource.startsWith('file:');
+
+        HMStreamingData? streamInfo;
+
+        if (!hasLocalFile) {
+          streamInfo =
+              await checkNGetUrl(currentSong.id, generateNewUrl: isNewUrlReq);
+
+          if (songIndex != currentIndex) {
+            return;
+          } else if (!streamInfo.playable) {
+            currentSongUrl = null;
+            isSongLoading = false;
+            Get.find<PlayerController>().notifyPlayError(streamInfo.statusMSG);
+            playbackState.add(
+              playbackState.value.copyWith(
+                processingState: AudioProcessingState.error,
+                errorCode: 404,
+                errorMessage: streamInfo.statusMSG,
+              ),
+            );
+            return;
+          }
+
+          final relativePath = currentSong.extras?['relativePath']?.toString();
+          final sharedPath = currentSong.extras?['sharedPath']?.toString();
+
+          if ((relativePath == null || relativePath.isEmpty) &&
+              (sharedPath == null || sharedPath.isEmpty)) {
+            currentSong.extras!['streamUrl'] = streamInfo.audio!.url;
+            currentSong.extras!['url'] = streamInfo.audio!.url;
+          }
+
+          currentSongUrl = streamInfo.audio!.url;
+        } else {
+          currentSongUrl = localSource;
+          printINFO("PLAY USING LOCAL SHARED FILE => $localSource");
         }
 
-        final relativePath = currentSong.extras?['relativePath']?.toString();
-        final sharedPath = currentSong.extras?['sharedPath']?.toString();
-        if ((relativePath == null || relativePath.isEmpty) &&
-            (sharedPath == null || sharedPath.isEmpty)) {
-          currentSong.extras!['streamUrl'] = streamInfo.audio!.url;
-          currentSong.extras!['url'] = streamInfo.audio!.url;
-        }
-        currentSongUrl = streamInfo.audio!.url;
+        playbackState.add(
+          playbackState.value.copyWith(queueIndex: currentIndex),
+        );
 
-        playbackState
-            .add(playbackState.value.copyWith(queueIndex: currentIndex));
         await _playList.add(_createAudioSource(currentSong));
 
         isSongLoading = false;
-        if (loudnessNormalizationEnabled && GetPlatform.isAndroid) {
+
+        if (!hasLocalFile &&
+            streamInfo != null &&
+            loudnessNormalizationEnabled &&
+            GetPlatform.isAndroid) {
           _normalizeVolume(streamInfo.audio!.loudnessDb);
         }
 
@@ -605,16 +642,8 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
           if (!GetPlatform.isDesktop) {
             final position = extras['position'];
             await _player.load();
-            await _player.seek(
-              Duration(
-                milliseconds: position,
-              ),
-            );
-            await _player.seek(
-              Duration(
-                milliseconds: position,
-              ),
-            );
+            await _player.seek(Duration(milliseconds: position));
+            await _player.seek(Duration(milliseconds: position));
           }
         } else {
           await _player.play();
@@ -654,36 +683,57 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
 
       case 'setSourceNPlay':
         final currMed = (extras!['mediaItem'] as MediaItem);
-        final futureStreamInfo = checkNGetUrl(currMed.id);
+
         isSongLoading = true;
         currentIndex = 0;
         endOfQueueReached = false;
         await _playList.clear();
         mediaItem.add(currMed);
         queue.add([currMed]);
-        final streamInfo = (await futureStreamInfo);
-        if (!streamInfo.playable) {
-          currentSongUrl = null;
-          isSongLoading = false;
-          Get.find<PlayerController>().notifyPlayError(streamInfo.statusMSG);
-          playbackState.add(playbackState.value
-              .copyWith(processingState: AudioProcessingState.error));
-          return;
-        }
 
-        final relativePath = currMed.extras?['relativePath']?.toString();
-        final sharedPath = currMed.extras?['sharedPath']?.toString();
-        if ((relativePath == null || relativePath.isEmpty) &&
-            (sharedPath == null || sharedPath.isEmpty)) {
-          currMed.extras!['streamUrl'] = streamInfo.audio!.url;
-          currMed.extras!['url'] = streamInfo.audio!.url;
+        final localSource = _getPlayableSource(currMed);
+        final hasLocalFile =
+            localSource != null && localSource.startsWith('file:');
+
+        HMStreamingData? streamInfo;
+
+        if (!hasLocalFile) {
+          streamInfo = await checkNGetUrl(currMed.id);
+
+          if (!streamInfo.playable) {
+            currentSongUrl = null;
+            isSongLoading = false;
+            Get.find<PlayerController>().notifyPlayError(streamInfo.statusMSG);
+            playbackState.add(
+              playbackState.value.copyWith(
+                processingState: AudioProcessingState.error,
+              ),
+            );
+            return;
+          }
+
+          final relativePath = currMed.extras?['relativePath']?.toString();
+          final sharedPath = currMed.extras?['sharedPath']?.toString();
+
+          if ((relativePath == null || relativePath.isEmpty) &&
+              (sharedPath == null || sharedPath.isEmpty)) {
+            currMed.extras!['streamUrl'] = streamInfo.audio!.url;
+            currMed.extras!['url'] = streamInfo.audio!.url;
+          }
+
+          currentSongUrl = streamInfo.audio!.url;
+        } else {
+          currentSongUrl = localSource;
+          printINFO("SET SOURCE PLAY USING LOCAL SHARED FILE => $localSource");
         }
-        currentSongUrl = streamInfo.audio!.url;
 
         await _playList.add(_createAudioSource(currMed));
         isSongLoading = false;
 
-        if (loudnessNormalizationEnabled && GetPlatform.isAndroid) {
+        if (!hasLocalFile &&
+            streamInfo != null &&
+            loudnessNormalizationEnabled &&
+            GetPlatform.isAndroid) {
           _normalizeVolume(streamInfo.audio!.loudnessDb);
         }
 
@@ -745,9 +795,7 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
 
         final currentQueue = queue.value;
         final currentItem = currentQueue[currentIndex];
-        final item = currentQueue.removeAt(
-          oldIndex,
-        );
+        final item = currentQueue.removeAt(oldIndex);
         currentQueue.insert(newIndex, item);
         currentIndex = currentQueue.indexOf(currentItem);
         queue.add(currentQueue);
@@ -802,6 +850,7 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
           currentShuffleIndex = 0;
         }
         break;
+
       default:
         break;
     }
@@ -835,7 +884,8 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
       final prevSessionData = await Hive.openBox("prevSessionData");
       await prevSessionData.clear();
       await prevSessionData.putAll(
-          {"queue": queueData, "position": position, "index": currIndex});
+        {"queue": queueData, "position": position, "index": currIndex},
+      );
       await prevSessionData.close();
     }
   }
@@ -849,9 +899,8 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
   @override
   ValueStream<Map<String, dynamic>> subscribeToChildren(String parentMediaId) {
     return Stream.fromFuture(
-            _mediaLibrary.getByRootId(parentMediaId).then((items) => items))
-        .map((_) => <String, dynamic>{})
-        .shareValue();
+      _mediaLibrary.getByRootId(parentMediaId).then((items) => items),
+    ).map((_) => <String, dynamic>{}).shareValue();
   }
 
   @override
@@ -884,6 +933,7 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
   Future<HMStreamingData> checkNGetUrl(String songId,
       {bool generateNewUrl = false, bool offlineReplacementUrl = false}) async {
     final songDownloadsBox = Hive.box("SongDownloads");
+
     if (!offlineReplacementUrl &&
         (await Hive.openBox("SongsCache")).containsKey(songId)) {
       final streamInfo = Hive.box("SongsCache").get(songId)["streamInfo"];
@@ -893,21 +943,23 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
         cacheAudioPlaceholder = Audio.fromJson(streamInfo[1]);
       } else {
         cacheAudioPlaceholder = Audio(
-            audioCodec: Codec.mp4a,
-            bitrate: 0,
-            loudnessDb: 0,
-            duration: 0,
-            size: 0,
-            url: "file://$_cacheDir/cachedSongs/$songId.mp3",
-            itag: 0);
+          audioCodec: Codec.mp4a,
+          bitrate: 0,
+          loudnessDb: 0,
+          duration: 0,
+          size: 0,
+          url: "file://$_cacheDir/cachedSongs/$songId.mp3",
+          itag: 0,
+        );
       }
 
       return HMStreamingData(
-          playable: true,
-          statusMSG: "OK",
-          lowQualityAudio: cacheAudioPlaceholder,
-          highQualityAudio: cacheAudioPlaceholder);
-        } else if (!offlineReplacementUrl && songDownloadsBox.containsKey(songId)) {
+        playable: true,
+        statusMSG: "OK",
+        lowQualityAudio: cacheAudioPlaceholder,
+        highQualityAudio: cacheAudioPlaceholder,
+      );
+    } else if (!offlineReplacementUrl && songDownloadsBox.containsKey(songId)) {
       final song = songDownloadsBox.get(songId);
       final streamInfoJson = song["streamInfo"];
 
@@ -989,6 +1041,7 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
       final songsUrlCacheBox = Hive.box("SongsUrlCache");
       final qualityIndex = Hive.box('AppPrefs').get('streamingQuality') ?? 1;
       HMStreamingData? streamInfo;
+
       if (songsUrlCacheBox.containsKey(songId) && !generateNewUrl) {
         final streamInfoJson = songsUrlCacheBox.get(songId);
         if (streamInfoJson.runtimeType.toString().contains("Map") &&
@@ -1092,6 +1145,7 @@ class MediaLibrary {
     } catch (e) {
       box = await Hive.openBox(libId);
     }
+
     final songs = box.values.toList().map((e) {
       final song = MediaItemBuilder.fromJson(e);
       return MediaItem(
