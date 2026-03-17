@@ -28,9 +28,12 @@ class MediaItemBuilder {
       {'url': ''}
     ];
 
+    final legacyUrl = json['url'] ?? nestedExtras['url'] ?? url;
+    final legacySharedPath = json['sharedPath'] ?? nestedExtras['sharedPath'];
+
     return MediaItem(
-      id: json["videoId"],
-      title: json["title"],
+      id: json["videoId"] ?? json["id"],
+      title: json["title"] ?? "",
       duration: json['duration'] != null
           ? Duration(seconds: json['duration'])
           : toDuration(json['length'] ?? nestedExtras['length']),
@@ -38,8 +41,14 @@ class MediaItemBuilder {
       artist: artistName,
       artUri: Uri.parse(Thumbnail(thumbnailsRaw[0]['url']).high),
       extras: {
-        'url': json['url'] ?? nestedExtras['url'] ?? url,
-        'sharedPath': json['sharedPath'] ?? nestedExtras['sharedPath'],
+        'streamUrl': json['streamUrl'] ?? nestedExtras['streamUrl'] ?? null,
+        'relativePath':
+            json['relativePath'] ?? nestedExtras['relativePath'] ?? null,
+
+        // compatibilità vecchi dati
+        'url': legacyUrl,
+        'sharedPath': legacySharedPath,
+
         'sharedSongId': json['sharedSongId'] ?? nestedExtras['sharedSongId'],
         'isSharedSong':
             (json['isSharedSong'] ?? nestedExtras['isSharedSong']) == true,
@@ -75,6 +84,9 @@ class MediaItemBuilder {
   static Map<String, dynamic> toJson(MediaItem mediaItem) {
     final extras = Map<String, dynamic>.from(mediaItem.extras ?? {});
 
+    final streamUrl = extras['streamUrl'];
+    final relativePath = extras['relativePath'];
+
     return {
       "videoId": mediaItem.id,
       "title": mediaItem.title,
@@ -86,15 +98,15 @@ class MediaItemBuilder {
       'thumbnails': [
         {'url': mediaItem.artUri.toString()}
       ],
-      'url': extras['url'],
-      'sharedPath': extras['sharedPath'],
+      'streamUrl': streamUrl,
+      'relativePath': relativePath,
       'sharedSongId': extras['sharedSongId'],
       'isSharedSong': extras['isSharedSong'] == true,
       'trackDetails': extras['trackDetails'],
       'year': extras['year'],
       'extras': {
-        'url': extras['url'],
-        'sharedPath': extras['sharedPath'],
+        'streamUrl': streamUrl,
+        'relativePath': relativePath,
         'sharedSongId': extras['sharedSongId'],
         'isSharedSong': extras['isSharedSong'] == true,
         'length': extras['length'],

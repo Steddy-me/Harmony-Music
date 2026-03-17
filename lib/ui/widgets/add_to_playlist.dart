@@ -191,13 +191,19 @@ class AddToPlaylistController extends GetxController {
     _getAllPlaylist();
   }
 
-  Future<void> _getAllPlaylist() async {
+  Future _getAllPlaylist() async {
     final plstsBox = await Hive.openBox("LibraryPlaylists");
 
     playlists.value = plstsBox.values
-        .map((e) {
-          if (e is Map && e["isCloudPlaylist"] == false) {
-            return Playlist.fromJson(Map<String, dynamic>.from(e));
+        .map<Playlist?>((e) {
+          if (e is Map) {
+            final playlist = Playlist.fromJson(Map<dynamic, dynamic>.from(e));
+
+            if (!playlist.isCloudPlaylist &&
+                !playlist.deleted &&
+                playlist.playlistId.startsWith('LIB')) {
+              return playlist;
+            }
           }
           return null;
         })
@@ -209,16 +215,13 @@ class AddToPlaylistController extends GetxController {
     final res = await Get.find<PipedServices>().getAllPlaylists();
     if (res.code == 1) {
       pipedPlaylists = res.response
-          .map<Playlist?>(
-            (item) => Playlist(
-              title: item['name'],
-              playlistId: item['id'],
-              description: "Piped Playlist",
-              thumbnailUrl: item['thumbnail'],
-              isPipedPlaylist: true,
-            ),
-          )
-          .whereType<Playlist>()
+          .map<Playlist>((item) => Playlist(
+                title: item['name'],
+                playlistId: item['id'],
+                description: "Piped Playlist",
+                thumbnailUrl: item['thumbnail'],
+                isPipedPlaylist: true,
+              ))
           .toList();
     }
   }
@@ -237,6 +240,22 @@ class AddToPlaylistController extends GetxController {
 
     try {
       if (playlistType.value == "local") {
+        final playlistsBox = await Hive.openBox("LibraryPlaylists");
+        final playlistRaw = playlistsBox.get(playlistId);
+
+        if (playlistRaw is Map) {
+          final playlist = Playlist.fromJson(Map<String, dynamic>.from(playlistRaw));
+
+          if (playlist.deleted) {
+            print('ADD TO PLAYLIST BLOCKED => ${playlist.playlistId} deleted=true');
+            await playlistsBox.close();
+            additionInProgress.value = false;
+            return false;
+          }
+        }
+
+        await playlistsBox.close();
+
         final plstBox = await Hive.openBox(playlistId);
         bool addedAny = false;
 
@@ -246,8 +265,7 @@ class AddToPlaylistController extends GetxController {
           try {
             if (item is Map) {
               final map = Map<String, dynamic>.from(item);
-              final id =
-                  map['id']?.toString() ?? map['videoId']?.toString() ?? '';
+              final id = map['id']?.toString() ?? map['videoId']?.toString() ?? '';
               if (id.isNotEmpty) {
                 existingIds.add(id);
               }
@@ -286,22 +304,22 @@ class AddToPlaylistController extends GetxController {
                 ? Map<String, dynamic>.from(rawExtras)
                 : <String, dynamic>{};
 
-            final sharedPath = extras['sharedPath']?.toString();
+            final relativePath = extras['relativePath']?.toString();
             final sharedSongId = extras['sharedSongId']?.toString();
             final isSharedSong = extras['isSharedSong'] == true;
 
-            if (isSharedSong && sharedPath != null && sharedPath.isNotEmpty) {
-              extras['url'] = sharedPath;
+            if (isSharedSong && relativePath != null && relativePath.isNotEmpty) {
+              extras['relativePath'] = relativePath;
               extras['sharedSongId'] = sharedSongId;
-              extras['sharedPath'] = sharedPath;
               extras['isSharedSong'] = true;
 
-              print('ADD TO PLAYLIST USING EXISTING SHARED => $sharedPath');
+              print('ADD TO PLAYLIST USING EXISTING SHARED => $relativePath');
             } else {
-              final rawUrl = extras['url']?.toString() ?? '';
+              final rawUrl = (extras['url'] ?? '').toString();
               final isLocalFile = rawUrl.isNotEmpty &&
                   !rawUrl.startsWith('http://') &&
-                  !rawUrl.startsWith('https://');
+                  !rawUrl.startsWith('https://') &&
+                  !rawUrl.startsWith('file:');
 
               if (isLocalFile) {
                 final sharedLibrary = Get.find<SharedLibraryService>();
@@ -309,28 +327,31 @@ class AddToPlaylistController extends GetxController {
 
                 if (await sourceFile.exists()) {
                   final sharedSong =
-                      await sharedLibrary.sharedSongsService.importSong(
-                    sourceFile,
-                  );
+                      await sharedLibrary.sharedSongsService.importSong(sourceFile);
 
-                  final newSharedPath =
-                      '${sharedLibrary.sharedDir.path}/songs/${sharedSong.filename}';
+                  final newRelativePath = 'songs/${sharedSong.filename}';
 
-                  extras['url'] = newSharedPath;
+                  extras['relativePath'] = newRelativePath;
                   extras['sharedSongId'] = sharedSong.id;
-                  extras['sharedPath'] = newSharedPath;
                   extras['isSharedSong'] = true;
 
-                  print('ADD TO PLAYLIST SHARED SONG => $newSharedPath');
+                  print('ADD TO PLAYLIST SHARED SONG => $newRelativePath');
                 } else {
                   print('ADD TO PLAYLIST LOCAL FILE MISSING => $rawUrl');
                 }
               } else {
-                print('ADD TO PLAYLIST NON-LOCAL URL => $rawUrl');
+                final streamUrl = (extras['streamUrl'] ?? rawUrl).toString();
+                extras['streamUrl'] = streamUrl.isEmpty ? null : streamUrl;
+                print('ADD TO PLAYLIST NON-LOCAL URL => $streamUrl');
               }
             }
 
+            itemJson['relativePath'] = extras['relativePath'];
+            itemJson['streamUrl'] = extras['streamUrl'];
+            itemJson['sharedSongId'] = extras['sharedSongId'];
+            itemJson['isSharedSong'] = extras['isSharedSong'] == true;
             itemJson['extras'] = extras;
+
             await plstBox.add(itemJson);
 
             existingIds.add(element.id);
@@ -348,9 +369,16 @@ class AddToPlaylistController extends GetxController {
 
           if (playlistRaw is Map) {
             final playlist = Playlist.fromJson(Map<String, dynamic>.from(playlistRaw));
-            playlist.touch();
-            await playlistsBox.put(playlistId, playlist.toJson());
+
+            if (!playlist.deleted) {
+              playlist.touch();
+              await playlistsBox.put(playlistId, playlist.toJson());
+            } else {
+              print('ADD TO PLAYLIST TOUCH SKIPPED => ${playlist.playlistId} deleted=true');
+            }
           }
+
+          await playlistsBox.close();
         } catch (e) {
           print('ADD TO PLAYLIST TOUCH PLAYLIST ERROR => $e');
         }

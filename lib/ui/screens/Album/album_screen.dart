@@ -553,7 +553,7 @@ class AlbumScreen extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.only(left: 25.0, bottom: 10, right: 30),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min, // ✅ FIX
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Marquee(
@@ -563,29 +563,23 @@ class AlbumScreen extends StatelessWidget {
               child: Text(
                 title.length > 50 ? title.substring(0, 50) : title,
                 maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                overflow: TextOverflow.ellipsis, // ✅ EXTRA sicurezza
                 style: Theme.of(context)
                     .textTheme
                     .titleLarge!
                     .copyWith(fontSize: 30),
               ),
             ),
-            Text(
-              description ?? "",
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
               child: Marquee(
                 delay: const Duration(milliseconds: 300),
                 duration: const Duration(seconds: 5),
-                id: artists.hashCode.toString(),
+                id: description.hashCode.toString(),
                 child: Text(
-                  artists,
+                  description ?? "playlist".tr,
                   maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  overflow: TextOverflow.ellipsis, // ✅ EXTRA
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),

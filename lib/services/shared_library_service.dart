@@ -394,6 +394,7 @@ class SharedLibraryService extends GetxService {
         .where((p) =>
             !p.isPipedPlaylist &&
             !p.isCloudPlaylist &&
+            !p.deleted &&
             p.playlistId.startsWith('LIB'))
         .toList();
 
@@ -409,7 +410,12 @@ class SharedLibraryService extends GetxService {
 
       print(
           'EXPORT PLAYLISTS PROCESS => ${playlist.playlistId} | ${playlist.title} | deleted=${playlist.deleted} | updatedAt=${playlist.updatedAt}');
-      final songsBox = await Hive.openBox(playlist.playlistId);
+
+      final alreadyOpen = Hive.isBoxOpen(playlist.playlistId);
+      final songsBox = alreadyOpen
+          ? Hive.box(playlist.playlistId)
+          : await Hive.openBox(playlist.playlistId);
+
       print('EXPORT PLAYLIST SONG COUNT => ${songsBox.length}');
 
       payload.add({
@@ -417,7 +423,9 @@ class SharedLibraryService extends GetxService {
         'songs': songsBox.values.toList(),
       });
 
-      await songsBox.close();
+      if (!alreadyOpen) {
+        await songsBox.close();
+      }
     }
 
     await writeJson('playlists.json', {
@@ -483,15 +491,17 @@ class SharedLibraryService extends GetxService {
           localPlaylist == null || incomingUpdatedAt > localUpdatedAt;
 
       if (!shouldImport) {
-        print(
-          'IMPORT PLAYLISTS KEEP LOCAL => ${incomingPlaylist.playlistId}',
-        );
+        print('IMPORT PLAYLISTS KEEP LOCAL => ${incomingPlaylist.playlistId}');
         continue;
       }
 
       await box.put(incomingPlaylist.playlistId, incomingPlaylist.toJson());
 
-      final songsBox = await Hive.openBox(incomingPlaylist.playlistId);
+      final alreadyOpen = Hive.isBoxOpen(incomingPlaylist.playlistId);
+      final songsBox = alreadyOpen
+          ? Hive.box(incomingPlaylist.playlistId)
+          : await Hive.openBox(incomingPlaylist.playlistId);
+
       await songsBox.clear();
 
       final songs = (row['songs'] as List?) ?? [];
@@ -502,7 +512,9 @@ class SharedLibraryService extends GetxService {
         }
       }
 
-      await songsBox.close();
+      if (!alreadyOpen) {
+        await songsBox.close();
+      }
 
       print(
         'IMPORT PLAYLIST APPLIED => ${incomingPlaylist.playlistId} | deleted=${incomingPlaylist.deleted} | updatedAt=${incomingPlaylist.updatedAt}',
@@ -521,7 +533,7 @@ class SharedLibraryService extends GetxService {
     await box.clear();
 
     for (final song in songs) {
-      final sharedPath = p.join(sharedSongsService.songsDir.path, song.filename);
+      final relativePath = 'songs/${song.filename}';
       final title = p.basenameWithoutExtension(song.originalFilename);
 
       final mediaItem = MediaItem(
@@ -529,8 +541,7 @@ class SharedLibraryService extends GetxService {
         title: title,
         artist: 'Shared Library',
         extras: {
-          'url': sharedPath,
-          'sharedPath': sharedPath,
+          'relativePath': relativePath,
           'sharedSongId': song.id,
           'isSharedSong': true,
           'date': song.updatedAt.millisecondsSinceEpoch,
@@ -543,6 +554,58 @@ class SharedLibraryService extends GetxService {
 
     await box.close();
     print('IMPORT SHARED SONGS END => ${songs.length}');
+  }
+
+  Future<void> purgeDeletedPlaylists() async {
+    print('PURGE DELETED PLAYLISTS START');
+
+    final box = await Hive.openBox('LibraryPlaylists');
+    final keysToDelete = <dynamic>[];
+
+    for (final key in box.keys.toList()) {
+      final raw = box.get(key);
+      if (raw is! Map) continue;
+
+      final playlist = Playlist.fromJson(Map<dynamic, dynamic>.from(raw));
+
+      if (!playlist.deleted) continue;
+
+      print(
+          'PURGE PLAYLIST MARKED DELETED => ${playlist.playlistId} | ${playlist.title}');
+
+      if (await Hive.boxExists(playlist.playlistId)) {
+        try {
+          if (Hive.isBoxOpen(playlist.playlistId)) {
+            final songsBox = Hive.box(playlist.playlistId);
+            await songsBox.clear();
+            await songsBox.close();
+          } else {
+            final songsBox = await Hive.openBox(playlist.playlistId);
+            await songsBox.clear();
+            await songsBox.close();
+          }
+
+          await Hive.deleteBoxFromDisk(playlist.playlistId);
+          print('PURGE PLAYLIST BOX => ${playlist.playlistId}');
+        } catch (e) {
+          print('PURGE PLAYLIST BOX ERROR => ${playlist.playlistId} => $e');
+        }
+      }
+
+      keysToDelete.add(key);
+    }
+
+    for (final key in keysToDelete) {
+      final raw = box.get(key);
+      if (raw is Map) {
+        final playlist = Playlist.fromJson(Map<dynamic, dynamic>.from(raw));
+        print('PURGE PLAYLIST ENTRY => ${playlist.playlistId}');
+      }
+      await box.delete(key);
+    }
+
+    await box.close();
+    print('PURGE DELETED PLAYLISTS END => removed ${keysToDelete.length}');
   }
 
   bool _isReservedPlaylist(String playlistId) {

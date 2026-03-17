@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 
+import '../models/playlist.dart';
 import '../ui/screens/Album/album_screen_controller.dart';
 import '../ui/screens/Playlist/playlist_screen_controller.dart';
 import '../ui/screens/Settings/settings_screen_controller.dart';
@@ -142,6 +143,104 @@ class Downloader extends GetxService {
     }
   }
 
+  Future<void> _updateDownloadedSongInLocalPlaylists({
+    required MediaItem song,
+    required String relativePath,
+    required String sharedSongId,
+    required String? streamUrl,
+  }) async {
+    try {
+      final playlistsBox = await Hive.openBox("LibraryPlaylists");
+      final playlistEntries = playlistsBox.values.toList();
+
+      for (final rawPlaylist in playlistEntries) {
+        try {
+          if (rawPlaylist is! Map) continue;
+
+          final playlist =
+              Playlist.fromJson(Map<String, dynamic>.from(rawPlaylist));
+
+          if (playlist.deleted ||
+              playlist.isCloudPlaylist ||
+              playlist.isPipedPlaylist ||
+              !playlist.playlistId.startsWith('LIB')) {
+            continue;
+          }
+
+          final alreadyOpen = Hive.isBoxOpen(playlist.playlistId);
+          final songsBox = alreadyOpen
+              ? Hive.box(playlist.playlistId)
+              : await Hive.openBox(playlist.playlistId);
+
+          bool updated = false;
+
+          for (final key in songsBox.keys.toList()) {
+            final rawSong = songsBox.get(key);
+
+            if (rawSong is! Map) continue;
+
+            final itemJson = Map<String, dynamic>.from(rawSong);
+            final rawExtras = itemJson['extras'];
+            final extras = rawExtras is Map
+                ? Map<String, dynamic>.from(rawExtras)
+                : <String, dynamic>{};
+
+            final itemId =
+                itemJson['videoId']?.toString() ?? itemJson['id']?.toString();
+
+            if (itemId != song.id) continue;
+
+            extras['relativePath'] = relativePath;
+            extras['sharedSongId'] = sharedSongId;
+            extras['isSharedSong'] = true;
+
+            if (streamUrl != null && streamUrl.isNotEmpty) {
+              extras['streamUrl'] = streamUrl;
+            }
+
+            itemJson['relativePath'] = relativePath;
+            itemJson['sharedSongId'] = sharedSongId;
+            itemJson['isSharedSong'] = true;
+
+            if (streamUrl != null && streamUrl.isNotEmpty) {
+              itemJson['streamUrl'] = streamUrl;
+            }
+
+            itemJson['extras'] = extras;
+
+            await songsBox.put(key, itemJson);
+            updated = true;
+
+            printINFO(
+              "PLAYLIST SONG UPDATED => ${playlist.playlistId} | ${song.id} | $relativePath",
+            );
+          }
+
+          if (updated) {
+            playlist.touch();
+            await playlistsBox.put(playlist.playlistId, playlist.toJson());
+          }
+
+          if (!alreadyOpen) {
+            await songsBox.close();
+          }
+        } catch (e) {
+          printERROR("Playlist update error => $e");
+        }
+      }
+
+      await playlistsBox.close();
+
+      try {
+        await Get.find<SharedLibraryService>().exportPlaylists();
+      } catch (e) {
+        printERROR("Playlist export after download update error => $e");
+      }
+    } catch (e) {
+      printERROR("Update downloaded song in playlists error => $e");
+    }
+  }
+
   Future<void> writeFileStream(MediaItem song) async {
     Completer<void> complete = Completer();
 
@@ -217,6 +316,9 @@ class Downloader extends GetxService {
             ? Map<String, dynamic>.from(songJson['extras'])
             : <String, dynamic>{};
 
+        extras['streamUrl'] = requiredAudioStream.url;
+        songJson['streamUrl'] = requiredAudioStream.url;
+
         extras['url'] = filePath;
         songJson['url'] = filePath;
 
@@ -228,18 +330,24 @@ class Downloader extends GetxService {
             final sharedSong =
                 await sharedLibrary.sharedSongsService.importSong(sourceFile);
 
-            final sharedPath =
-                "${sharedLibrary.sharedDir.path}/songs/${sharedSong.filename}";
+            final relativePath = "songs/${sharedSong.filename}";
 
             extras['sharedSongId'] = sharedSong.id;
-            extras['sharedPath'] = sharedPath;
+            extras['relativePath'] = relativePath;
             extras['isSharedSong'] = true;
 
             songJson['sharedSongId'] = sharedSong.id;
-            songJson['sharedPath'] = sharedPath;
+            songJson['relativePath'] = relativePath;
             songJson['isSharedSong'] = true;
 
-            printINFO("SHARED SONG IMPORTED => $sharedPath");
+            printINFO("SHARED SONG IMPORTED => $relativePath");
+
+            await _updateDownloadedSongInLocalPlaylists(
+              song: song,
+              relativePath: relativePath,
+              sharedSongId: sharedSong.id,
+              streamUrl: requiredAudioStream.url,
+            );
           }
         } catch (e) {
           printERROR("Shared import error => $e");

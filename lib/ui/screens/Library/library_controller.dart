@@ -448,19 +448,26 @@ class LibraryPlaylistsController extends GetxController
         final sharedSong =
             await sharedLibrary.sharedSongsService.importSong(sourceFile);
 
-        final newSharedPath =
-            '${sharedLibrary.sharedDir.path}/songs/${sharedSong.filename}';
+        final newRelativePath = 'songs/${sharedSong.filename}';
 
+        extras['relativePath'] = newRelativePath;
         extras['sharedSongId'] = sharedSong.id;
-        extras['sharedPath'] = newSharedPath;
         extras['isSharedSong'] = true;
 
-        print('CREATE PLAYLIST SHARED SONG => $newSharedPath');
+        itemJson['relativePath'] = newRelativePath;
+        itemJson['sharedSongId'] = sharedSong.id;
+        itemJson['isSharedSong'] = true;
+
+        print('CREATE PLAYLIST SHARED SONG => $newRelativePath');
       } else {
         print('CREATE PLAYLIST LOCAL FILE MISSING => $rawUrl');
       }
     } else {
-      print('CREATE PLAYLIST NON-LOCAL URL => $rawUrl');
+      final streamUrl = (extras['streamUrl'] ?? rawUrl).toString();
+      extras['streamUrl'] = streamUrl.isEmpty ? null : streamUrl;
+      itemJson['streamUrl'] = extras['streamUrl'];
+
+      print('CREATE PLAYLIST NON-LOCAL URL => $streamUrl');
     }
 
     itemJson['extras'] = extras;

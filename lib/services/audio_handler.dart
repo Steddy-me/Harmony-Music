@@ -27,6 +27,7 @@ import '/models/media_Item_builder.dart';
 import '/services/utils.dart';
 import '../ui/screens/Settings/settings_screen_controller.dart';
 import '../ui/screens/Library/library_controller.dart';
+import '../services/shared_library_service.dart';
 // ignore: unused_import, implementation_imports, depend_on_referenced_packages
 import "package:media_kit/src/player/platform_player.dart" show MPVLogLevel;
 
@@ -302,21 +303,69 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
     queue.add(newQueue);
   }
 
+  String _normalizeFileUri(String path) {
+    return File(path).uri.toString();
+  }
+
+  String? _resolveRelativePathToFile(String? relativePath) {
+    if (relativePath == null || relativePath.isEmpty) return null;
+
+    try {
+      final sharedLibrary = Get.find<SharedLibraryService>();
+      final fullPath = '${sharedLibrary.sharedDir.path}/$relativePath';
+      final file = File(fullPath);
+      if (file.existsSync()) {
+        return _normalizeFileUri(fullPath);
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  String? _resolveLegacySharedPath(String? sharedPath) {
+    if (sharedPath == null || sharedPath.isEmpty) return null;
+
+    final file = File(sharedPath);
+    if (file.existsSync()) {
+      return file.uri.toString();
+    }
+
+    return null;
+  }
+
   String? _getPlayableSource(MediaItem mediaItem) {
     final extras = mediaItem.extras;
     if (extras == null) return null;
 
-    final sharedPath = extras['sharedPath']?.toString();
-    if (sharedPath != null && sharedPath.isNotEmpty) {
-      final sharedFile = File(sharedPath);
-      if (sharedFile.existsSync()) {
-        return sharedFile.uri.toString();
-      }
+    final relativePath = extras['relativePath']?.toString();
+    final resolvedRelative = _resolveRelativePathToFile(relativePath);
+    if (resolvedRelative != null) {
+      return resolvedRelative;
+    }
+
+    final legacySharedPath = extras['sharedPath']?.toString();
+    final resolvedLegacyShared = _resolveLegacySharedPath(legacySharedPath);
+    if (resolvedLegacyShared != null) {
+      return resolvedLegacyShared;
     }
 
     final url = extras['url']?.toString();
     if (url != null && url.isNotEmpty) {
-      return url;
+      if (url.startsWith('http://') ||
+          url.startsWith('https://') ||
+          url.startsWith('file:')) {
+        return url;
+      }
+
+      final localFile = File(url);
+      if (localFile.existsSync()) {
+        return localFile.uri.toString();
+      }
+    }
+
+    final streamUrl = extras['streamUrl']?.toString();
+    if (streamUrl != null && streamUrl.isNotEmpty) {
+      return streamUrl;
     }
 
     return null;
@@ -534,8 +583,11 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
           return;
         }
 
+        final relativePath = currentSong.extras?['relativePath']?.toString();
         final sharedPath = currentSong.extras?['sharedPath']?.toString();
-        if (sharedPath == null || sharedPath.isEmpty) {
+        if ((relativePath == null || relativePath.isEmpty) &&
+            (sharedPath == null || sharedPath.isEmpty)) {
+          currentSong.extras!['streamUrl'] = streamInfo.audio!.url;
           currentSong.extras!['url'] = streamInfo.audio!.url;
         }
         currentSongUrl = streamInfo.audio!.url;
@@ -619,8 +671,11 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
           return;
         }
 
+        final relativePath = currMed.extras?['relativePath']?.toString();
         final sharedPath = currMed.extras?['sharedPath']?.toString();
-        if (sharedPath == null || sharedPath.isEmpty) {
+        if ((relativePath == null || relativePath.isEmpty) &&
+            (sharedPath == null || sharedPath.isEmpty)) {
+          currMed.extras!['streamUrl'] = streamInfo.audio!.url;
           currMed.extras!['url'] = streamInfo.audio!.url;
         }
         currentSongUrl = streamInfo.audio!.url;
@@ -852,44 +907,81 @@ class MyAudioHandler extends BaseAudioHandler with GetxServiceMixin {
           statusMSG: "OK",
           lowQualityAudio: cacheAudioPlaceholder,
           highQualityAudio: cacheAudioPlaceholder);
-    } else if (!offlineReplacementUrl && songDownloadsBox.containsKey(songId)) {
+        } else if (!offlineReplacementUrl && songDownloadsBox.containsKey(songId)) {
       final song = songDownloadsBox.get(songId);
       final streamInfoJson = song["streamInfo"];
-      Audio? audio;
-      final path = (song['url'] ??
-              (song['extras'] is Map ? song['extras']['url'] : null))
-          ?.toString();
-      if (streamInfoJson != null && streamInfoJson.isNotEmpty) {
-        audio = Audio.fromJson(streamInfoJson[1]);
-      } else {
-        audio = Audio(
-            itag: 140,
-            audioCodec: Codec.mp4a,
-            bitrate: 0,
-            duration: 0,
-            loudnessDb: 0,
-            url: path ?? "",
-            size: 0);
+
+      final extrasMap = song['extras'] is Map
+          ? Map<String, dynamic>.from(song['extras'])
+          : <String, dynamic>{};
+
+      final path = (song['url'] ?? extrasMap['url'])?.toString();
+      final streamUrl =
+          (song['streamUrl'] ?? extrasMap['streamUrl'])?.toString();
+      final relativePath =
+          (song['relativePath'] ?? extrasMap['relativePath'])?.toString();
+
+      Audio buildAudioWithUrl(String resolvedUrl) {
+        if (streamInfoJson != null && streamInfoJson.isNotEmpty) {
+          final audioJson = Map<String, dynamic>.from(streamInfoJson[1]);
+          audioJson['url'] = resolvedUrl;
+          return Audio.fromJson(audioJson);
+        }
+
+        return Audio(
+          itag: 140,
+          audioCodec: Codec.mp4a,
+          bitrate: 0,
+          duration: 0,
+          loudnessDb: 0,
+          url: resolvedUrl,
+          size: 0,
+        );
       }
 
-      final streamInfo = HMStreamingData(
+      String? resolvedLocalPath = path;
+
+      if ((resolvedLocalPath == null || resolvedLocalPath.isEmpty) &&
+          relativePath != null &&
+          relativePath.isNotEmpty) {
+        try {
+          final sharedLibrary = Get.find<SharedLibraryService>();
+          resolvedLocalPath = '${sharedLibrary.sharedDir.path}/$relativePath';
+        } catch (_) {}
+      }
+
+      if (resolvedLocalPath != null && resolvedLocalPath.isNotEmpty) {
+        if (resolvedLocalPath.contains(
+            "${Get.find<SettingsScreenController>().supportDirPath}/Music")) {
+          final localAudio = buildAudioWithUrl(resolvedLocalPath);
+          return HMStreamingData(
+            playable: true,
+            statusMSG: "OK",
+            highQualityAudio: localAudio,
+            lowQualityAudio: localAudio,
+          );
+        }
+
+        final status = await PermissionService.getExtStoragePermission();
+        if (status && await File(resolvedLocalPath).exists()) {
+          final localAudio = buildAudioWithUrl(resolvedLocalPath);
+          return HMStreamingData(
+            playable: true,
+            statusMSG: "OK",
+            highQualityAudio: localAudio,
+            lowQualityAudio: localAudio,
+          );
+        }
+      }
+
+      if (streamUrl != null && streamUrl.isNotEmpty) {
+        final remoteAudio = buildAudioWithUrl(streamUrl);
+        return HMStreamingData(
           playable: true,
           statusMSG: "OK",
-          highQualityAudio: audio,
-          lowQualityAudio: audio);
-
-      if (path == null || path.isEmpty) {
-        return checkNGetUrl(songId, offlineReplacementUrl: true);
-      }
-
-      if (path.contains(
-          "${Get.find<SettingsScreenController>().supportDirPath}/Music")) {
-        return streamInfo;
-      }
-
-      final status = await PermissionService.getExtStoragePermission();
-      if (status && await File(path).exists()) {
-        return streamInfo;
+          highQualityAudio: remoteAudio,
+          lowQualityAudio: remoteAudio,
+        );
       }
 
       return checkNGetUrl(songId, offlineReplacementUrl: true);
@@ -1010,6 +1102,8 @@ class MediaLibrary {
         extras: {
           "libraryId": libId,
           "url": song.extras?['url'],
+          "streamUrl": song.extras?['streamUrl'],
+          "relativePath": song.extras?['relativePath'],
           "sharedPath": song.extras?['sharedPath'],
           "sharedSongId": song.extras?['sharedSongId'],
           "isSharedSong": song.extras?['isSharedSong'],
