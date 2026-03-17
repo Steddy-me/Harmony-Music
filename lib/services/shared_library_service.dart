@@ -534,17 +534,38 @@ class SharedLibraryService extends GetxService {
 
     for (final song in songs) {
       final relativePath = 'songs/${song.filename}';
-      final title = p.basenameWithoutExtension(song.originalFilename);
+      final title = song.title?.trim().isNotEmpty == true
+          ? song.title!
+          : p.basenameWithoutExtension(song.originalFilename);
+      final artist = song.artist?.trim().isNotEmpty == true
+          ? song.artist!
+          : 'Shared Library';
+
+      final artUrl = (song.thumbnailUrl != null && song.thumbnailUrl!.isNotEmpty)
+          ? song.thumbnailUrl!
+          : '';
 
       final mediaItem = MediaItem(
-        id: 'shared_${song.id}',
+        id: song.videoId?.isNotEmpty == true ? song.videoId! : 'shared_${song.id}',
         title: title,
-        artist: 'Shared Library',
+        artist: artist,
+        artUri: Uri.tryParse(artUrl),
         extras: {
           'relativePath': relativePath,
           'sharedSongId': song.id,
           'isSharedSong': true,
           'date': song.updatedAt.millisecondsSinceEpoch,
+          'artists': [
+            {'name': artist}
+          ],
+          'album': {
+            'name': song.album?.isNotEmpty == true ? song.album! : 'Shared Library',
+            'id': 'shared_library'
+          },
+          'streamUrl': null,
+          'trackDetails': null,
+          'year': null,
+          'length': null,
         },
         playable: true,
       );

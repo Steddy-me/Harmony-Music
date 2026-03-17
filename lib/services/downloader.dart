@@ -327,8 +327,14 @@ class Downloader extends GetxService {
           final sourceFile = File(filePath);
 
           if (await sourceFile.exists()) {
-            final sharedSong =
-                await sharedLibrary.sharedSongsService.importSong(sourceFile);
+            final sharedSong = await sharedLibrary.sharedSongsService.importSong(
+              sourceFile,
+              title: song.title,
+              artist: song.artist,
+              album: song.album,
+              thumbnailUrl: song.artUri?.toString(),
+              videoId: song.id,
+            );
 
             final relativePath = "songs/${sharedSong.filename}";
 

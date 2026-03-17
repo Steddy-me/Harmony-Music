@@ -13,6 +13,12 @@ class SharedSong {
   final String extension;
   final DateTime updatedAt;
 
+  final String? title;
+  final String? artist;
+  final String? album;
+  final String? thumbnailUrl;
+  final String? videoId;
+
   SharedSong({
     required this.id,
     required this.filename,
@@ -21,6 +27,11 @@ class SharedSong {
     required this.size,
     required this.extension,
     required this.updatedAt,
+    this.title,
+    this.artist,
+    this.album,
+    this.thumbnailUrl,
+    this.videoId,
   });
 
   Map<String, dynamic> toJson() => {
@@ -31,6 +42,11 @@ class SharedSong {
         'size': size,
         'extension': extension,
         'updatedAt': updatedAt.toIso8601String(),
+        'title': title,
+        'artist': artist,
+        'album': album,
+        'thumbnailUrl': thumbnailUrl,
+        'videoId': videoId,
       };
 
   factory SharedSong.fromJson(Map<String, dynamic> json) => SharedSong(
@@ -41,6 +57,11 @@ class SharedSong {
         size: json['size'],
         extension: json['extension'],
         updatedAt: DateTime.parse(json['updatedAt']),
+        title: json['title'],
+        artist: json['artist'],
+        album: json['album'],
+        thumbnailUrl: json['thumbnailUrl'],
+        videoId: json['videoId'],
       );
 }
 
@@ -107,7 +128,14 @@ class SharedSongsService {
     }
   }
 
-  Future<SharedSong> importSong(File sourceFile) async {
+  Future<SharedSong> importSong(
+    File sourceFile, {
+    String? title,
+    String? artist,
+    String? album,
+    String? thumbnailUrl,
+    String? videoId,
+  }) async {
     await init();
 
     final checksum = await calculateFileChecksum(sourceFile);
@@ -133,15 +161,20 @@ class SharedSongsService {
 
     final stat = await destination.stat();
 
-    final song = SharedSong(
-      id: checksum,
-      filename: filename,
-      originalFilename: p.basename(sourceFile.path),
-      checksum: checksum,
-      size: stat.size,
-      extension: extension,
-      updatedAt: DateTime.now(),
-    );
+        final song = SharedSong(
+          id: checksum,
+          filename: filename,
+          originalFilename: p.basename(sourceFile.path),
+          checksum: checksum,
+          size: stat.size,
+          extension: extension,
+          updatedAt: DateTime.now(),
+          title: title,
+          artist: artist,
+          album: album,
+          thumbnailUrl: thumbnailUrl,
+          videoId: videoId,
+        );
 
     songsAfter.add(song);
     await saveSharedSongs(songsAfter);
