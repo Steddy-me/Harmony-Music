@@ -68,7 +68,14 @@ class SharedLibraryService extends GetxService {
       return dir;
     }
 
-    if (GetPlatform.isWindows || GetPlatform.isLinux || GetPlatform.isMacOS) {
+    if (GetPlatform.isMacOS) {
+      final supportDir = await getApplicationSupportDirectory();
+      final dir = Directory(p.join(supportDir.path, 'HarmonyShared'));
+      print('SHARED DIR MACOS => ${dir.path}');
+      return dir;
+    }
+
+    if (GetPlatform.isWindows || GetPlatform.isLinux) {
       final docsDir = await getApplicationDocumentsDirectory();
       final userDir = docsDir.parent.path;
       final dir = Directory(p.join(userDir, 'Music', 'HarmonyShared'));
