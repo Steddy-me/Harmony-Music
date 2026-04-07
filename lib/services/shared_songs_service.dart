@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:harmonymusic/models/nextcloud_config.dart';
+import 'package:harmonymusic/services/nextcloud_webdav_service.dart';
 import 'package:path/path.dart' as p;
 
 class SharedSong {
@@ -67,29 +69,58 @@ class SharedSong {
 
 class SharedSongsService {
   final Directory sharedDir;
+  final NextcloudConfig? nextcloudConfig;
+  final NextcloudWebDavService _webDavService;
 
-  SharedSongsService(this.sharedDir);
+  SharedSongsService(
+    this.sharedDir, {
+    this.nextcloudConfig,
+    NextcloudWebDavService? webDavService,
+  }) : _webDavService = webDavService ?? NextcloudWebDavService();
 
   Directory get songsDir => Directory(p.join(sharedDir.path, 'songs'));
   File get songsIndexFile => File(p.join(sharedDir.path, 'songs_index.json'));
 
-  Future<void> init() async {
-    if (!await songsDir.exists()) {
-      await songsDir.create(recursive: true);
-    }
+  bool get _useWebDavOnAndroid =>
+      Platform.isAndroid && nextcloudConfig != null && nextcloudConfig!.isValid;
 
-    if (!await songsIndexFile.exists()) {
-      await songsIndexFile.writeAsString(
-        jsonEncode({
-          'updatedAt': DateTime.now().toIso8601String(),
-          'songs': [],
-        }),
-      );
+  Future<void> init() async {
+    if (!_useWebDavOnAndroid) {
+      if (!await songsDir.exists()) {
+        await songsDir.create(recursive: true);
+      }
+
+      if (!await songsIndexFile.exists()) {
+        await songsIndexFile.writeAsString(
+          jsonEncode({
+            'updatedAt': DateTime.now().toIso8601String(),
+            'songs': [],
+          }),
+        );
+      }
     }
   }
 
   Future<List<SharedSong>> loadSharedSongs() async {
     await init();
+
+    if (_useWebDavOnAndroid) {
+      final content = await _webDavService.readTextFile(
+        nextcloudConfig!,
+        relativeRemotePath: 'songs_index.json',
+      );
+
+      if (content == null || content.trim().isEmpty) {
+        return [];
+      }
+
+      final jsonData = jsonDecode(content) as Map<String, dynamic>;
+      final songsRaw = (jsonData['songs'] as List?) ?? [];
+
+      return songsRaw
+          .map((e) => SharedSong.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
 
     final content = await songsIndexFile.readAsString();
     if (content.trim().isEmpty) {
@@ -112,7 +143,19 @@ class SharedSongsService {
       'songs': songs.map((e) => e.toJson()).toList(),
     };
 
-    await songsIndexFile.writeAsString(jsonEncode(data));
+    final content = jsonEncode(data);
+
+    if (_useWebDavOnAndroid) {
+      await _webDavService.writeTextFile(
+        nextcloudConfig!,
+        relativeRemotePath: 'songs_index.json',
+        content: content,
+        contentType: 'application/json; charset=utf-8',
+      );
+      return;
+    }
+
+    await songsIndexFile.writeAsString(content);
   }
 
   Future<String> calculateFileChecksum(File file) async {
@@ -128,6 +171,24 @@ class SharedSongsService {
     }
   }
 
+  Future<bool> _remoteSongExists(String filename) async {
+    if (!_useWebDavOnAndroid) return false;
+
+    return _webDavService.remoteFileExists(
+      nextcloudConfig!,
+      relativeRemotePath: 'songs/$filename',
+    );
+  }
+
+  Future<void> _uploadSongToRemote(File sourceFile, String filename) async {
+    await _webDavService.uploadFile(
+      nextcloudConfig!,
+      sourceFile: sourceFile,
+      relativeRemotePath: 'songs/$filename',
+      contentType: 'audio/mp4',
+    );
+  }
+
   Future<SharedSong> importSong(
     File sourceFile, {
     String? title,
@@ -138,6 +199,10 @@ class SharedSongsService {
   }) async {
     await init();
 
+    if (!await sourceFile.exists()) {
+      throw Exception('Source file missing: ${sourceFile.path}');
+    }
+
     final checksum = await calculateFileChecksum(sourceFile);
     final extension = p.extension(sourceFile.path).toLowerCase();
     final filename = '$checksum$extension';
@@ -145,37 +210,85 @@ class SharedSongsService {
 
     final songsBefore = await loadSharedSongs();
     final existingBefore = findSongByChecksum(songsBefore, checksum);
+
     if (existingBefore != null) {
-      return existingBefore;
+      if (_useWebDavOnAndroid) {
+        final remoteExists = await _remoteSongExists(existingBefore.filename);
+        if (remoteExists) {
+          return existingBefore;
+        }
+      } else {
+        final existingFile = File(p.join(songsDir.path, existingBefore.filename));
+        if (await existingFile.exists()) {
+          return existingBefore;
+        }
+      }
     }
 
-    if (!await destination.exists()) {
-      await sourceFile.copy(destination.path);
+    if (_useWebDavOnAndroid) {
+      await _uploadSongToRemote(sourceFile, filename);
+    } else {
+      if (!await destination.exists()) {
+        await sourceFile.copy(destination.path);
+      }
+
+      if (!await destination.exists()) {
+        throw Exception('Shared song file was not created: ${destination.path}');
+      }
+
+      final sourceSize = await sourceFile.length();
+      final destSize = await destination.length();
+
+      if (destSize <= 0 || destSize != sourceSize) {
+        throw Exception(
+          'Shared song copy invalid. source=$sourceSize dest=$destSize path=${destination.path}',
+        );
+      }
     }
 
     final songsAfter = await loadSharedSongs();
     final existingAfter = findSongByChecksum(songsAfter, checksum);
+
     if (existingAfter != null) {
-      return existingAfter;
+      if (_useWebDavOnAndroid) {
+        final remoteExists = await _remoteSongExists(existingAfter.filename);
+        if (remoteExists) {
+          return existingAfter;
+        }
+      } else {
+        final existingFile = File(p.join(songsDir.path, existingAfter.filename));
+        if (await existingFile.exists()) {
+          return existingAfter;
+        }
+      }
+
+      songsAfter.removeWhere((s) => s.checksum == checksum);
     }
 
-    final stat = await destination.stat();
+    final int size;
+    if (_useWebDavOnAndroid) {
+      size = await sourceFile.length();
+    } else {
+      final stat = await destination.stat();
+      size = stat.size;
+    }
 
-        final song = SharedSong(
-          id: checksum,
-          filename: filename,
-          originalFilename: p.basename(sourceFile.path),
-          checksum: checksum,
-          size: stat.size,
-          extension: extension,
-          updatedAt: DateTime.now(),
-          title: title,
-          artist: artist,
-          album: album,
-          thumbnailUrl: thumbnailUrl,
-          videoId: videoId,
-        );
+    final song = SharedSong(
+      id: checksum,
+      filename: filename,
+      originalFilename: p.basename(sourceFile.path),
+      checksum: checksum,
+      size: size,
+      extension: extension,
+      updatedAt: DateTime.now(),
+      title: title,
+      artist: artist,
+      album: album,
+      thumbnailUrl: thumbnailUrl,
+      videoId: videoId,
+    );
 
+    songsAfter.removeWhere((s) => s.checksum == checksum);
     songsAfter.add(song);
     await saveSharedSongs(songsAfter);
 
@@ -209,9 +322,16 @@ class SharedSongsService {
     final available = <SharedSong>[];
 
     for (final song in songs) {
-      final file = File(p.join(songsDir.path, song.filename));
-      if (await file.exists()) {
-        available.add(song);
+      if (_useWebDavOnAndroid) {
+        final exists = await _remoteSongExists(song.filename);
+        if (exists) {
+          available.add(song);
+        }
+      } else {
+        final file = File(p.join(songsDir.path, song.filename));
+        if (await file.exists()) {
+          available.add(song);
+        }
       }
     }
 

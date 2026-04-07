@@ -17,6 +17,7 @@ import '/ui/player/player_controller.dart';
 import '/ui/utils/theme_controller.dart';
 import 'components/custom_expansion_tile.dart';
 import 'settings_screen_controller.dart';
+import 'package:flutter/services.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, this.isBottomNavActive = false});
@@ -544,31 +545,33 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (!GetPlatform.isAndroid)
                   ListTile(
                     trailing: TextButton(
                       child: Text(
                         "reset".tr,
                         style: Theme.of(context)
-                            .textTheme
-                            .titleMedium!
-                            .copyWith(fontSize: 15),
+                          .textTheme
+                          .titleMedium!
+                        .copyWith(fontSize: 15),
                       ),
                       onPressed: () {
-                        settingsController.resetDownloadLocation();
+                        settingsController.resetSharedLocation();
                       },
                     ),
                     contentPadding:
                         const EdgeInsets.only(left: 5, right: 10, top: 0),
-                    title: Text("downloadLocation".tr),
+                    title: const Text("Shared directory"),
                     subtitle: Obx(() => Text(
-                        settingsController.isCurrentPathsupportDownDir
-                            ? "In App storage directory"
-                            : settingsController.downloadLocationPath.value,
+                        settingsController.sharedLocationPath.value.isEmpty
+                            ? "Not set"
+                            : settingsController.sharedLocationPath.value,
                         style: Theme.of(context).textTheme.bodyMedium)),
                     onTap: () async {
-                      settingsController.setDownloadLocation();
+                      settingsController.setSharedLocation();
                     },
                   ),
+                if (GetPlatform.isAndroid) const NextcloudQuickInfoTile(),
                   ListTile(
                     trailing: TextButton(
                       child: Text(
@@ -869,4 +872,174 @@ Widget radioWidget(
                 : controller.onContentChange),
         title: Text(label),
       ));
+}
+
+class NextcloudSettingsDialog extends StatelessWidget {
+  const NextcloudSettingsDialog({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingsController = Get.find<SettingsScreenController>();
+
+    final baseUrlController = TextEditingController(
+      text: settingsController.nextcloudBaseUrl.value,
+    );
+    final usernameController = TextEditingController(
+      text: settingsController.nextcloudUsername.value,
+    );
+    final appPasswordController = TextEditingController(
+      text: settingsController.nextcloudAppPassword.value,
+    );
+    final remoteBasePathController = TextEditingController(
+      text: settingsController.nextcloudRemoteBasePath.value,
+    );
+
+    return CommonDialog(
+      child: Container(
+        padding: const EdgeInsets.only(
+          top: 24,
+          left: 20,
+          right: 20,
+          bottom: 16,
+        ),
+        constraints: const BoxConstraints(maxHeight: 560),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Nextcloud WebDAV',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Android will use Nextcloud WebDAV for shared songs and sync files.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 16),
+              Obx(
+                () => SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Enable Nextcloud sync'),
+                  value: settingsController.nextcloudEnabled.value,
+                  onChanged: settingsController.setNextcloudEnabled,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: baseUrlController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: 'Server URL',
+                  hintText: 'https://your-domain/nextcloud',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Username',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: appPasswordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'App password',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: remoteBasePathController,
+                decoration: const InputDecoration(
+                  labelText: 'Remote folder',
+                  hintText: 'Harmony Music',
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text("cancel".tr),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      settingsController
+                          .setNextcloudBaseUrl(baseUrlController.text.trim());
+                      settingsController
+                          .setNextcloudUsername(usernameController.text.trim());
+                      settingsController.setNextcloudAppPassword(
+                        appPasswordController.text.trim(),
+                      );
+                      settingsController.setNextcloudRemoteBasePath(
+                        remoteBasePathController.text.trim(),
+                      );
+
+                      Navigator.of(context).pop();
+
+                      ScaffoldMessenger.of(Get.context!).showSnackBar(
+                        snackbar(
+                          Get.context!,
+                          'Nextcloud settings saved',
+                          size: SanckBarSize.MEDIUM,
+                        ),
+                      );
+                    },
+                    child: const Text('Save'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class NextcloudQuickInfoTile extends StatelessWidget {
+  const NextcloudQuickInfoTile({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingsController = Get.find<SettingsScreenController>();
+
+    return Obx(
+      () {
+        final enabled = settingsController.nextcloudEnabled.value;
+        final baseUrl = settingsController.nextcloudBaseUrl.value.trim();
+        final username = settingsController.nextcloudUsername.value.trim();
+        final remotePath =
+            settingsController.nextcloudRemoteBasePath.value.trim();
+
+        final status = enabled ? 'Enabled' : 'Disabled';
+        final details = <String>[
+          'Status: $status',
+          if (baseUrl.isNotEmpty) baseUrl,
+          if (username.isNotEmpty) 'User: $username',
+          if (remotePath.isNotEmpty) 'Folder: $remotePath',
+        ].join('\n');
+
+        return ListTile(
+          contentPadding: const EdgeInsets.only(left: 5, right: 10, top: 0),
+          title: const Text('Nextcloud WebDAV'),
+          subtitle: Text(
+            details,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (context) => const NextcloudSettingsDialog(),
+            );
+          },
+        );
+      },
+    );
+  }
 }

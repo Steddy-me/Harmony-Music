@@ -5,3 +5,10 @@
 # Xcode-related
 **/dgph
 **/xcuserdata/
+# Harmony shared runtime files
+songs_index.json
+favorites.json
+playlists.json
+albums.json
+artists.json
+HarmonyShared/

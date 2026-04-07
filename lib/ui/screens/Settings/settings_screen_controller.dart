@@ -49,6 +49,11 @@ class SettingsScreenController extends GetxController {
   final restorePlaybackSession = false.obs;
   final cacheHomeScreenData = true.obs;
   final currentVersion = "V1.13.0";
+  final nextcloudEnabled = false.obs;
+  final nextcloudBaseUrl = ''.obs;
+  final nextcloudUsername = ''.obs;
+  final nextcloudAppPassword = ''.obs;
+  final nextcloudRemoteBasePath = ''.obs;
 
   @override
   void onInit() {
@@ -78,6 +83,12 @@ class SettingsScreenController extends GetxController {
   }
 
   Future<void> _setInitValue() async {
+    nextcloudEnabled.value = setBox.get('nextcloudEnabled') ?? false;
+    nextcloudBaseUrl.value = (setBox.get('nextcloudBaseUrl') ?? '').toString();
+    nextcloudUsername.value = (setBox.get('nextcloudUsername') ?? '').toString();
+    nextcloudAppPassword.value = (setBox.get('nextcloudAppPassword') ?? '').toString();
+    nextcloudRemoteBasePath.value =
+        (setBox.get('nextcloudRemoteBasePath') ?? '').toString();
     final isDesktop = GetPlatform.isDesktop;
     final appLang = setBox.get('currentAppLanguageCode') ?? "en";
     currentAppLanguageCode.value = appLang == "zh_Hant"
@@ -380,5 +391,30 @@ class SettingsScreenController extends GetxController {
     } else {
       return (await getApplicationDocumentsDirectory()).path;
     }
+  }
+
+  void setNextcloudEnabled(bool val) {
+  setBox.put('nextcloudEnabled', val);
+  nextcloudEnabled.value = val;
+}
+
+  void setNextcloudBaseUrl(String val) {
+    setBox.put('nextcloudBaseUrl', val);
+    nextcloudBaseUrl.value = val;
+  }
+
+  void setNextcloudUsername(String val) {
+    setBox.put('nextcloudUsername', val);
+    nextcloudUsername.value = val;
+  }
+
+  void setNextcloudAppPassword(String val) {
+    setBox.put('nextcloudAppPassword', val);
+    nextcloudAppPassword.value = val;
+  }
+
+  void setNextcloudRemoteBasePath(String val) {
+    setBox.put('nextcloudRemoteBasePath', val);
+    nextcloudRemoteBasePath.value = val;
   }
 }

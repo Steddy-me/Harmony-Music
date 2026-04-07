@@ -14,6 +14,10 @@ import '../models/media_Item_builder.dart';
 import '../models/playlist.dart';
 import '../ui/screens/Library/library_controller.dart';
 import 'shared_songs_service.dart';
+import 'storage/shared_storage_provider.dart';
+import 'storage/file_storage_provider.dart';
+import 'package:harmonymusic/models/nextcloud_config.dart';
+import 'package:harmonymusic/services/storage/webdav_storage_provider.dart';
 
 class SharedLibraryService extends GetxService {
   static const String settingsKey = 'sharedLocationPath';
@@ -21,11 +25,26 @@ class SharedLibraryService extends GetxService {
 
   late Directory sharedDir;
   late SharedSongsService sharedSongsService;
+  late SharedStorageProvider storage;
 
   Timer? _syncTimer;
+  Timer? _favoritesExportTimer;
+  Timer? _albumsExportTimer;
+  Timer? _artistsExportTimer;
+  Timer? _playlistsExportTimer;
+
+  bool _favoritesDirty = false;
+  bool _albumsDirty = false;
+  bool _artistsDirty = false;
+  bool _playlistsDirty = false;
+
+  bool get _useDebouncedRemoteWrites => GetPlatform.isAndroid;
   final Map<String, int> _lastKnownFileTimes = {};
 
   Future<SharedLibraryService> init() async {
+    final appPrefs = Hive.box('AppPrefs');
+    final nextcloudConfig = NextcloudConfig.fromPrefs(appPrefs);
+
     sharedDir = await _resolveSharedDirectory();
     print('SHARED DIR INIT => ${sharedDir.path}');
 
@@ -36,9 +55,20 @@ class SharedLibraryService extends GetxService {
       print('SHARED DIR EXISTS => ${sharedDir.path}');
     }
 
-    sharedSongsService = SharedSongsService(sharedDir);
-    await sharedSongsService.init();
+    if (GetPlatform.isAndroid && nextcloudConfig != null) {
+      storage = WebDavStorageProvider(nextcloudConfig);
+      print('SHARED STORAGE MODE => WEBDAV');
+    } else {
+      storage = FileStorageProvider(sharedDir);
+      print('SHARED STORAGE MODE => FILESYSTEM');
+    }
 
+    sharedSongsService = SharedSongsService(
+      sharedDir,
+      nextcloudConfig: GetPlatform.isAndroid ? nextcloudConfig : null,
+    );
+
+    await sharedSongsService.init();
     await _initKnownFileTimes();
 
     return this;
@@ -89,7 +119,7 @@ class SharedLibraryService extends GetxService {
     return dir;
   }
 
-  File _jsonFile(String name) => File(p.join(sharedDir.path, name));
+  //File _jsonFile(String name) => File(p.join(sharedDir.path, name));
 
   File get lockFile => File(p.join(sharedDir.path, lockFileName));
 
@@ -121,13 +151,9 @@ class SharedLibraryService extends GetxService {
       'playlists.json',
       'songs_index.json',
     ]) {
-      final file = _jsonFile(name);
-      if (await file.exists()) {
-        _lastKnownFileTimes[name] =
-            (await file.lastModified()).millisecondsSinceEpoch;
-      } else {
-        _lastKnownFileTimes[name] = 0;
-      }
+      final ts = await storage.lastModified(name);
+      _lastKnownFileTimes[name] =
+          ts?.millisecondsSinceEpoch ?? 0;
     }
   }
 
@@ -159,10 +185,10 @@ class SharedLibraryService extends GetxService {
         'playlists.json',
         'songs_index.json',
       ]) {
-        final file = _jsonFile(name);
-        if (!await file.exists()) continue;
+        final tsDate = await storage.lastModified(name);
+        if (tsDate == null) continue;
 
-        final ts = (await file.lastModified()).millisecondsSinceEpoch;
+        final ts = tsDate.millisecondsSinceEpoch;
         final oldTs = _lastKnownFileTimes[name] ?? 0;
 
         if (ts > oldTs) {
@@ -219,50 +245,84 @@ class SharedLibraryService extends GetxService {
     }
   }
 
+  void _scheduleDebouncedExport({
+  required String type,
+  required Future<void> Function() action,
+  required Duration delay,
+}) {
+  switch (type) {
+    case 'favorites':
+      _favoritesDirty = true;
+      _favoritesExportTimer?.cancel();
+      _favoritesExportTimer = Timer(delay, () async {
+        if (!_favoritesDirty) return;
+        _favoritesDirty = false;
+        await action();
+      });
+      break;
+
+    case 'albums':
+      _albumsDirty = true;
+      _albumsExportTimer?.cancel();
+      _albumsExportTimer = Timer(delay, () async {
+        if (!_albumsDirty) return;
+        _albumsDirty = false;
+        await action();
+      });
+      break;
+
+    case 'artists':
+      _artistsDirty = true;
+      _artistsExportTimer?.cancel();
+      _artistsExportTimer = Timer(delay, () async {
+        if (!_artistsDirty) return;
+        _artistsDirty = false;
+        await action();
+      });
+      break;
+
+    case 'playlists':
+      _playlistsDirty = true;
+      _playlistsExportTimer?.cancel();
+      _playlistsExportTimer = Timer(delay, () async {
+        if (!_playlistsDirty) return;
+        _playlistsDirty = false;
+        await action();
+      });
+      break;
+  }
+}
+
   Future<void> writeJson(String fileName, Map<String, dynamic> data) async {
     print('WRITE JSON START => $fileName');
-    print('WRITE JSON PATH => ${_jsonFile(fileName).path}');
 
     await _acquireLock();
     try {
-      final file = _jsonFile(fileName);
-      final tempFile = File('${file.path}.tmp');
+      final content = const JsonEncoder.withIndent('  ').convert(data);
 
-      await tempFile.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(data),
-      );
+      await storage.writeFile(fileName, content);
 
-      if (await file.exists()) {
-        await file.delete();
+      final ts = await storage.lastModified(fileName);
+      if (ts != null) {
+        _lastKnownFileTimes[fileName] = ts.millisecondsSinceEpoch;
       }
 
-      await tempFile.rename(file.path);
-
-      _lastKnownFileTimes[fileName] =
-          (await file.lastModified()).millisecondsSinceEpoch;
-
-      print('WRITE JSON DONE => ${file.path}');
+      print('WRITE JSON DONE => $fileName');
     } finally {
       await _releaseLock();
     }
   }
 
   Future<Map<String, dynamic>?> readJson(String fileName) async {
-    final file = _jsonFile(fileName);
-    print('READ JSON PATH => ${file.path}');
+    print('READ JSON => $fileName');
 
-    if (!await file.exists()) {
+    final content = await storage.readFile(fileName);
+
+    if (content == null) {
       print('READ JSON MISS => $fileName');
       return null;
     }
 
-    final content = await file.readAsString();
-    if (content.trim().isEmpty) {
-      print('READ JSON EMPTY => $fileName');
-      return null;
-    }
-
-    print('READ JSON OK => $fileName');
     return jsonDecode(content) as Map<String, dynamic>;
   }
 
